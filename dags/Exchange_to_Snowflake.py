@@ -30,6 +30,7 @@ def transform_exchange(data):
     trans_df.columns = ['exchange_rate', 'cur_nm']
     trans_df['currency_unit'] = trans_df['cur_nm'].str.split().str[1]
     trans_df['country'] = trans_df['cur_nm'].str.split().str[0]
+    trans_df['exchange_rate'] = trans_df['exchange_rate'].str.replace(',', '')   # 쉼표가 있어서 여러개의 문자로 인식됨
     del trans_df['cur_nm']
 
     # 변환 필요한 나라
@@ -42,21 +43,18 @@ def transform_exchange(data):
         if country in change_country.keys():
             country_list = change_country[country]
             for country_name in country_list:
-                print(country, country_name)
                 currency_unit = country if pd.isna(currency_unit) else currency_unit
                 trans_df.loc[len(trans_df)] = [exchange_rate, currency_unit, country_name]
             
             delete_index.append(trans_df[trans_df['country']==country].index[0])
 
+    logging.info("진짜로 끝?")
     # 변환 후 필요없는 행 삭제
     trans_df.drop(delete_index, axis=0, inplace=True)
-    
-    # # list로 변경
-    # trans_list = []
-    # for exchange_rate, currency_unit, country in trans_df:
-    #     trans_list.append("({},'{}','{}')".format(exchange_rate, currency_unit, country))
+    logging.info("진짜로 끝!")
         
-    return trans_df
+    # dataframe, numpy 형태 모두 안됨. 무조건 list 형태로 반환
+    return trans_df.values.tolist()
     
 # 테이블 생성 함수
 def _create_table(cur, table, drop_first):
@@ -84,37 +82,37 @@ def insert_data(df, table):
         # 임시 테이블로 원본 테이블을 복사
         cur.execute(f"CREATE TEMP TABLE t AS SELECT * FROM {table};")
         # 새로운 데이터 임시 테이블에 삽입
-        for exchange_rate, currency_unit, country in df.values:
-            sql = f"INSERT INTO t(country, exchange_rate, currency_unit) VALUES ('{country}', {exchange_rate}, '{currency_unit}');"
+        now = datetime.now()
+        for exchange_rate, currency_unit, country in df:
+            sql = f"INSERT INTO t VALUES ('{now.date()}', '{country}', {exchange_rate}, '{currency_unit}', '{now}');"
             logging.info(sql)
             cur.execute(sql)
-    
+            
     except Exception as error:
         print(error)
         cur.execute("ROLLBACK;") 
-        raise
-    
+        raise   
     logging.info("TEMP done")
-    
+
     try:
         cur.execute("BEGIN;")
         # 원본 테이블 생성
         _create_table(cur, table, True)
         
-        # 임시 테이블 내용을 원본 테이블로 복사
-        cur.execute(f"INSERT INTO {table} SELECT DISTINCT * FROM t;")
-        cur.execute("COMMIT;")   # cur.execute("END;")
-        
         # 기존 테이블 대체
-        alter_sql = f"""DELETE FROM {table};
-        INSERT INTO {table}
+        delete_sql = f"DELETE FROM {table};"
+        cur.execute(delete_sql)
+        
+        alter_sql = f"""INSERT INTO {table}
         SELECT exchange_date, country, exchange_rate, currency_unit, created_date FROM (
-            SELECT *, ROW_NUMBER() OVER (PARTITION BY date ORDER BY country, country DESC) seq
+            SELECT *, ROW_NUMBER() OVER (PARTITION BY exchange_date, country ORDER BY created_date DESC) seq
             FROM t
         )
         WHERE seq = 1;"""
         
         logging.info(alter_sql)
+        cur.execute(alter_sql)
+        cur.execute("COMMIT;")
         
     except Exception as error:
         print(error)
