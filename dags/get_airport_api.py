@@ -139,7 +139,7 @@ def load_flight(flight_list, schema, table):
         arrival_airport	        string	    NOT NULL,
         departure_airport	    string	    NOT NULL	DEFAULT 'Seoul (Incheon)',
         arrival_sched_time	    datetime	NOT NULL,
-        execution_date	        datetime	NOT NULL	DEFAULT CURRENT_DATE(),
+        execution_date	        datetime	NOT NULL	DEFAULT CURRENT_TIMESTAMP(),
         PRIMARY KEY (flight_iata, departure_sched_time)
     );
     """
@@ -176,7 +176,7 @@ def load_price(price_list, schema, table):
         departure_sched_time	datetime	NOT NULL,
         price	                number	    NOT NULL,
         cabin	                string	    NOT NULL,
-        execution_date	        datetime	NOT NULL	DEFAULT CURRENT_DATE(),
+        execution_date	        datetime	NOT NULL	DEFAULT CURRENT_TIMESTAMP(),
         PRIMARY KEY (flight_iata, departure_sched_time)
     );
     """
