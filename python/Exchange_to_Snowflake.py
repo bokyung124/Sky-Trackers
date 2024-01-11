@@ -131,6 +131,6 @@ with DAG(
     schedule = '@daily'
 ) as dag:
 
-    data = bring_exchange
+    data = bring_exchange(Variable.get("exchange_api_key"))
     df = transform_exchange(data)
     insert_data(df, "EXCHANGE_RATE")
