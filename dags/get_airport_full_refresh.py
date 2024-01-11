@@ -114,19 +114,6 @@ def extract_price(token, flight_list):
             print(response.status_code)
             print(e)
 
-# @task
-# def transform_flight(flight_price_list):
-#     flight_list = []
-#     for data in flight_price_list:
-#         flight_list.append("('{}','{}','{}','{}','{}','{}')".format(data['flight_iata'], data['departure_sched_time'], data['arrival_country'], \
-#                                                                     data['arrival_airport'], data['departure_airport'], data['arrival_sched_time']))
-#     return flight_list
-
-# @task
-# def transform_price(price_data):
-#     price_df = pd.DataFrame(price_data)
-#     return price_df
-
 
 @task
 def load_flight(flight_list, schema, table):
@@ -152,6 +139,7 @@ def load_flight(flight_list, schema, table):
     logging.info(create_table_sql)
 
     try:
+        cur.execute(f"DROP TABLE IF EXISTS {schema}.{table};")
         cur.execute(create_table_sql)
         for flight in flight_list:
             logging.info(f"Inserting flight: {flight}")
@@ -188,6 +176,7 @@ def load_price(price_list, schema, table):
 
     logging.info(create_table_sql)
     try:
+        cur.execute(f"DROP TABLE IF EXISTS {schema}.{table};")
         cur.execute(create_table_sql)
         for price in price_list:
             logging.info(f"Insert price: {price}")
@@ -205,7 +194,7 @@ def load_price(price_list, schema, table):
 with DAG(
     dag_id = 'Airport_API',
     start_date = datetime(2023,1,8),
-    schedule = '@once',
+    schedule = '@daily',
     catchup = False,
     max_active_runs = 1,
     default_args = {
