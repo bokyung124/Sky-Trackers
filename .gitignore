@@ -128,6 +128,7 @@ ENV/
 env.bak/
 venv.bak/
 connections.json
+variables.json
 
 # Spyder project settings
 .spyderproject
