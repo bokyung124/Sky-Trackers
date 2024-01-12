@@ -2,6 +2,7 @@ from airflow import DAG
 from airflow.decorators import task
 from airflow.models import Variable
 from airflow.providers.snowflake.hooks.snowflake import SnowflakeHook
+from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 
 from datetime import datetime
 import requests
@@ -120,6 +121,14 @@ def insert_data(df, table):
         raise    
     logging.info("INSERT done")
     
+# 다 실행 후 analytics join
+trigger_analytics = TriggerDagRunOperator(
+    task_id = "trigger_analytics",
+    trigger_dag_id="Exchange_to_Analytics",
+    execution_date='{{ds}}',
+    reset_dag_run=True
+)
+    
     
 with DAG(
     dag_id = 'Exchange_to_Snowflake',
@@ -131,4 +140,5 @@ with DAG(
 
     data = bring_exchange(Variable.get("exchange_api_key"))
     df = transform_exchange(data)
-    insert_data(df, "EXCHANGE_RATE")
+    
+    insert_data(df, "EXCHANGE_RATE") >> trigger_analytics
