@@ -48,8 +48,8 @@ def extract_flight():
         
         return flight_list
     except Exception as e:
-        print(response.status_code)
-        print(e)
+        logging.info(response.status_code)
+        logging.error(e)
 
 @task
 def get_amadeus_token():
@@ -88,10 +88,11 @@ def extract_price(token, flight_list):
 
     for f in flight_list:
         arrival_country = f['arrival_country']
+        departure_date = f['departure_sched_time'][:10]
         params = {
             'originLocationCode': 'ICN',  
             'destinationLocationCode': arrival_country, 
-            'departureDate': '2024-01-11', 
+            'departureDate': departure_date, 
             'currencyCode': 'KRW',
             'adults': '1', 
         }
@@ -111,8 +112,9 @@ def extract_price(token, flight_list):
                 price_list.append(price_dict)
             return price_list
         except Exception as e:
-            print(response.status_code)
-            print(e)
+            logging.info(response.status_code)
+            logging.info(response.text)
+            logging.error(e)
 
 
 @task
@@ -126,7 +128,7 @@ def load_flight(flight_list, schema, table):
         arrival_airport	        string,
         departure_airport	    string	    NOT NULL	DEFAULT 'Seoul (Incheon)',
         arrival_sched_time	    datetime,
-        created_date	        datetime	NOT NULL	DEFAULT CURRENT_TIMESTAMP(),
+        created_date	        datetime	NOT NULL	DEFAULT CURRENT_DATE(),
         PRIMARY KEY (flight_iata, departure_sched_time)
     );
     """
@@ -142,6 +144,9 @@ def load_flight(flight_list, schema, table):
         cur.execute(f"DROP TABLE IF EXISTS {schema}.{table};")
         cur.execute(create_table_sql)
         for flight in flight_list:
+            if flight['flight_iata'] is None or flight['departure_sched_time'] is None or flight['departure_airport'] is None:
+                logging.info(f"Skipping flight due to NULL values: {flight}")
+                continue
             logging.info(f"Inserting flight: {flight}")
             cur.execute(insert_sql, {
                 'flight_iata': flight['flight_iata'], 
@@ -164,12 +169,11 @@ def load_price(price_list, schema, table):
         departure_sched_time	datetime	NOT NULL,
         price	                number,
         cabin	                string,
-        created_date	        datetime	NOT NULL	DEFAULT CURRENT_TIMESTAMP(),
+        created_date	        datetime	NOT NULL	DEFAULT CURRENT_DATE(),
         PRIMARY KEY (flight_iata, departure_sched_time)
     );
     """
     
-
     insert_sql = f"""
     INSERT INTO {schema}.{table} (flight_iata, departure_sched_time, price, cabin) 
     VALUES (%(flight_iata)s, %(departure_sched_time)s, %(price)s, %(cabin)s)""" 
@@ -179,6 +183,9 @@ def load_price(price_list, schema, table):
         cur.execute(f"DROP TABLE IF EXISTS {schema}.{table};")
         cur.execute(create_table_sql)
         for price in price_list:
+            if price['flight_iata'] is None or price['departure_sched_time'] is None:
+                logging.info(f"Skipping flight due to NULL values: {price}")
+                continue
             logging.info(f"Insert price: {price}")
             cur.execute(insert_sql, {
                 'flight_iata': price['flight_iata'], 
