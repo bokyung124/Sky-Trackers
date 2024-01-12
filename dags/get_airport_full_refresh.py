@@ -122,10 +122,10 @@ def load_flight(flight_list, schema, table):
     CREATE TABLE IF NOT EXISTS {schema}.{table} (
         flight_iata	            string	    NOT NULL,
         departure_sched_time	datetime	NOT NULL,
-        arrival_country	        string	    NOT NULL,
-        arrival_airport	        string	    NOT NULL,
+        arrival_country	        string,
+        arrival_airport	        string,
         departure_airport	    string	    NOT NULL	DEFAULT 'Seoul (Incheon)',
-        arrival_sched_time	    datetime	NOT NULL,
+        arrival_sched_time	    datetime,
         created_date	        datetime	NOT NULL	DEFAULT CURRENT_TIMESTAMP(),
         PRIMARY KEY (flight_iata, departure_sched_time)
     );
@@ -162,8 +162,8 @@ def load_price(price_list, schema, table):
     CREATE TABLE IF NOT EXISTS {schema}.{table} (
         flight_iata	            string	    NOT NULL,
         departure_sched_time	datetime	NOT NULL,
-        price	                number	    NOT NULL,
-        cabin	                string	    NOT NULL,
+        price	                number,
+        cabin	                string,
         created_date	        datetime	NOT NULL	DEFAULT CURRENT_TIMESTAMP(),
         PRIMARY KEY (flight_iata, departure_sched_time)
     );
