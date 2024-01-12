@@ -135,7 +135,11 @@ with DAG(
     start_date = datetime(2024, 1, 8),
     catchup=False,
     tags=['API', 'EXCHANGE'],
-    schedule = '@daily'
+    schedule = '@daily',
+    default_args={
+        "retries": 3,
+        "retry_delay": 60*3,
+    }
 ) as dag:
 
     data = bring_exchange(Variable.get("exchange_api_key"))
