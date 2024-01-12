@@ -2,6 +2,7 @@ from airflow import DAG
 from airflow.decorators import task
 from airflow.models import Variable
 from airflow.providers.snowflake.hooks.snowflake import SnowflakeHook
+from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 
 from datetime import datetime, timedelta
 
@@ -115,6 +116,12 @@ def load(schema, table, records):
         cur.execute("ROLLBACK;")
         raise
 
+trigger_task = TriggerDagRunOperator(
+    task_id='trigger_task',
+    trigger_dag_id='weather_analytics',
+    execution_date='{{ ds }}',
+    reset_dag_run=True
+)
 
 with DAG(
     dag_id = 'weather_to_snowflake',
@@ -134,4 +141,4 @@ with DAG(
     api_key = Variable.get("open_weather_api_key")
 
     records = transform(extract(schema, lat_lon_table, api_key))
-    load(schema, table, records)
+    load(schema, table, records) >> trigger_task

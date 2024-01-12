@@ -67,14 +67,8 @@ def elt(raw_schema, schema, raw_table, country_city_table, table):
 
 with DAG(
     dag_id = 'weather_analytics',
-    start_date = datetime(2024,1,8), # 날짜가 미래인 경우 실행이 안됨
-    schedule = '0 2 * * *',  # 적당히 조절
-    max_active_runs = 1,
+    start_date = datetime(2024, 1, 8), # 날짜가 미래인 경우 실행이 안됨
     catchup = False,
-    # default_args = {
-    #     'retries': 1,
-    #     'retry_delay': timedelta(minutes=3),
-    # }
 ) as dag:
     
     raw_schema = "raw_data"
