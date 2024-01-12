@@ -129,6 +129,7 @@ env.bak/
 venv.bak/
 connections.json
 variables.json
+.DS_Store
 
 # Spyder project settings
 .spyderproject
