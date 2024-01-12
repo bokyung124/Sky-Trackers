@@ -23,7 +23,7 @@ def get_snowflake_conn():
 
 @task
 def extract_flight():
-    access_key = '82361307721bebdf9cdea8caae839a98'
+    access_key = Variable.get("flight_api_key")
     url = 'http://api.aviationstack.com/v1/flights'
     limit = 100
     params ={'access_key' : access_key, 'limit':limit, 'dep_iata':'ICN'}
@@ -53,8 +53,8 @@ def extract_flight():
 
 @task
 def get_amadeus_token():
-    client_id = 'P6uEWTlCtDdZw9KhnZxnfxdl8cZU0PNU'
-    client_secret = 'rmBhf9FqINQyhvHJ'
+    client_id = Variable.get('price_client_id')
+    client_secret = Variable.get('price_client_secret')
     url = "https://test.api.amadeus.com/v1/security/oauth2/token"
     headers = {
         "Content-Type": "application/x-www-form-urlencoded"
