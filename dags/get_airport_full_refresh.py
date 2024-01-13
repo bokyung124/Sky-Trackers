@@ -9,6 +9,7 @@ from airflow.providers.snowflake.hooks.snowflake import SnowflakeHook
 
 from datetime import datetime
 from datetime import timedelta
+import time
 
 import requests
 import logging
@@ -23,33 +24,55 @@ def get_snowflake_conn():
 
 @task
 def extract_flight():
-    access_key = Variable.get("flight_api_key")
-    url = 'http://api.aviationstack.com/v1/flights'
+    access_key = Variable.get('flight_api_key')
     limit = 100
-    params ={'access_key' : access_key, 'limit':limit, 'dep_iata':'ICN'}
-
-    response = requests.get(url, params=params)
-    flights = json.loads(response.text)
+    offset = 0
 
     flight_list = []
+    fail_count = 0
 
-    try:
-        for flight in flights.get('data'):
-            arrival_country = flight['arrival']['iata']               # 도착 국가
-            arrival_airport = flight['arrival']['airport']            # 도착 공항
-            arrival_sched_time  = flight['arrival']['scheduled']      # 도착 예정 시간
-            departure_airport = flight['departure']['airport']        # 출발 공항 (인천공항)
-            departure_sched_time = flight['departure']['scheduled']   # 출발 예정 시간
-            flight_iata = flight['flight']['iata']                    # 항공편명
+    while True:
+        url = 'http://api.aviationstack.com/v1/flights'
+        params ={'access_key' : access_key, 'dep_iata':'ICN', 'offset':offset}
 
-            flight_dict = {'flight_iata':flight_iata, 'departure_sched_time':departure_sched_time, 'departure_airport':departure_airport, \
-                    'arrival_country':arrival_country, 'arrival_airport':arrival_airport, 'arrival_sched_time':arrival_sched_time}
-            flight_list.append(flight_dict)
-        
-        return flight_list
-    except Exception as e:
-        logging.info(response.status_code)
-        logging.error(e)
+        try:
+            response = requests.get(url, params=params)
+            flights = json.loads(response.text)
+
+            logging.info(response.status_code)
+
+            if response.status_code == '429':
+                raise ValueError('rate_limit_reached')
+            
+            if flights.get('data') is not None:
+                for flight in flights.get('data'):
+                    arrival_country = flight['arrival']['iata']               # 도착 국가
+                    arrival_airport = flight['arrival']['airport']            # 도착 공항
+                    arrival_sched_time  = flight['arrival']['scheduled']      # 도착 예정 시간
+                    departure_airport = flight['departure']['airport']        # 출발 공항 (인천공항)
+                    departure_sched_time = flight['departure']['scheduled']   # 출발 예정 시간
+                    flight_iata = flight['flight']['iata']                    # 항공편명
+
+                    flight_dict = {'flight_iata':flight_iata, 'departure_sched_time':departure_sched_time, 'departure_airport':departure_airport, \
+                            'arrival_country':arrival_country, 'arrival_airport':arrival_airport, 'arrival_sched_time':arrival_sched_time}
+                    flight_list.append(flight_dict)
+                
+                if len(flights.get('data')) < limit:
+                    break
+                offset += limit
+            else:
+                logging.error("flights.get('data') returned None. Moving to next iteration.")
+                continue
+            fail_count = 0
+        except Exception as e:
+            logging.info(response.status_code)
+            logging.info(response.text)
+            logging.error(e)
+            fail_count += 1  
+            if fail_count > 5:  
+                logging.error("API 호출 연속 5번 실패로 중단")
+                break
+    return flight_list
 
 @task
 def get_amadeus_token():
@@ -85,22 +108,31 @@ def extract_price(token, flight_list):
 
     price_list = []
 
+    if flight_list is None:
+        raise ValueError("flight_list is None")
 
-    for f in flight_list:
-        arrival_country = f['arrival_country']
-        departure_date = f['departure_sched_time'][:10]
+    arrival_country = [f['arrival_country'] for f in flight_list]
+    departure_date = str(flight_list[0]['departure_sched_time'][:10])
+
+
+    for country in arrival_country:
+        logging.info(f'departure: {departure_date}, country: {country}')
         params = {
             'originLocationCode': 'ICN',  
-            'destinationLocationCode': arrival_country, 
+            'destinationLocationCode': country, 
             'departureDate': departure_date, 
             'currencyCode': 'KRW',
             'adults': '1', 
+            'max': 250,
         }
 
-        response = requests.get(url, headers=headers, params=params)
-
         try:
+            response = requests.get(url, headers=headers, params=params)
+            
             offers = response.json()
+            if not offers or not offers.get('data'):  
+                raise ValueError("No offer data")
+            
             for offer in offers.get('data'):
                 first_flight = offer.get('itineraries')[0]['segments'][0]
                 flight_iata = first_flight['carrierCode'] + first_flight['number']
@@ -108,13 +140,15 @@ def extract_price(token, flight_list):
                 price = offer['price']['total']
                 cabin = offer['travelerPricings'][0]['fareDetailsBySegment'][0]['cabin']
 
+                logging.info(f'departure: {departure_sched_time}, price: {price}')
                 price_dict = {'flight_iata':flight_iata, 'departure_sched_time':departure_sched_time, 'price':price, 'cabin':cabin}
                 price_list.append(price_dict)
-            return price_list
         except Exception as e:
             logging.info(response.status_code)
             logging.info(response.text)
             logging.error(e)
+            raise
+    return price_list
 
 
 @task
@@ -200,7 +234,7 @@ def load_price(price_list, schema, table):
 
 with DAG(
     dag_id = 'Airport_API',
-    start_date = datetime(2023,1,8),
+    start_date = datetime(2023,1,9),
     schedule = '@daily',
     catchup = False,
     max_active_runs = 1,
