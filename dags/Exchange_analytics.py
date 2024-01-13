@@ -26,6 +26,7 @@ def join_table(schema, table):
                     SELECT 
                         EXCHANGE_DATE AS DATE,
                         COUNTRY_CODE,
+                        COUNTRY_KOR,
                         EXCHANGE_RATE,
                         CURRENCY_UNIT
                     FROM (SELECT * 
