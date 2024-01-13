@@ -63,11 +63,11 @@ def _create_table(cur, table, drop_first):
         cur.execute(f"DROP TABLE IF EXISTS {table};")
     cur.execute(f"""
                     CREATE TABLE IF NOT EXISTS {table} (
-                        exchange_date	date	NOT NULL	DEFAULT CURRENT_DATE()	COMMENT '환율 데이터 불러오는 날짜',
-                            country	string	NOT NULL,
-                            exchange_rate	float	NOT NULL	COMMENT '매매 기준율',
-                            currency_unit	string	NOT NULL,
-                            created_date	datetime	NOT NULL	DEFAULT CURRENT_DATE()
+                        exchange_date	date	NOT NULL    DEFAULT CURRENT_DATE()	COMMENT '환율 데이터 불러오는 날짜',
+                        country	string	NOT NULL,
+                        exchange_rate	float	NOT NULL	COMMENT '매매 기준율',
+                        currency_unit	string	NOT NULL,
+                        created_date	datetime	NOT NULL	DEFAULT CURRENT_DATE()
                     );""")
 
 # DB 에 insert
