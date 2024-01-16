@@ -15,6 +15,9 @@
 |날씨 API|https://openweathermap.org/api/one-call-3|
 
 # 사용 기술
+
+![](python/work_flow.png)
+
 |항목|기술명|
 |---|---|
 |데이터 수집|Open API|
@@ -23,6 +26,15 @@
 |대시보드|Preset.io|
 |환경 세팅 및 관리|Docker|
 |협업 도구|Slack, Github|
+
+# 대시보드
+
+- 필터 선택 전
+<img width="693" alt="image" src="https://github.com/bokyung124/AWS_Exercise/assets/53086873/14ccf420-a13c-4d6a-b1dc-ee45fe2f0b40">
+
+- 필터 선택 후
+<img width="692" alt="image" src="https://github.com/bokyung124/AWS_Exercise/assets/53086873/578d62e2-4bbf-4fd6-a635-70d213cb7aec">
+
 
 # 참여자 정보 및 각 역할
 |이름|담당 업무|
