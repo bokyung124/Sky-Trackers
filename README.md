@@ -14,6 +14,11 @@
 |환율 API|https://www.koreaexim.go.kr/ir/HPHKIR020M01?apino=2&viewtype=C&searchselect=&searchword=#none|
 |날씨 API|https://openweathermap.org/api/one-call-3|
 
+## 프로젝트 보고서
+
+https://fossil-chinchilla-b56.notion.site/25357d06882346598b9dd54504a508fc
+
+
 # 사용 기술
 
 ![](python/work_flow.png)
