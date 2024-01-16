@@ -22,7 +22,9 @@ def flight_join(schema, table):
         SELECT 
             A.flight_iata,
             TO_CHAR(DATE_TRUNC('SECOND', A.departure_sched_time), 'HH24:MI:SS') AS departure_sched_time,
-            B.country_name as arrival_country,
+            A.arrival_city as city_code,
+            B.country_code,
+            B.country_kor as arrival_country,
             B.city_name as arrival_city,
             A.arrival_airport,
             TO_CHAR(DATE_TRUNC('SECOND', A.arrival_sched_time), 'HH24:MI:SS') AS arrival_sched_time,
@@ -35,14 +37,17 @@ def flight_join(schema, table):
     """
     
     try:
-        cur.execute(f"DROP TABLE IF EXISTS {schema}.{table};")
+        cur.execute("BEGIN;")
 
+        cur.execute(f"DROP TABLE IF EXISTS {schema}.{table};")
         logging.info('drop table')
 
         cur.execute(create_table_sql)
         logging.info('create table')
 
+        cur.execute("COMMIT;")
     except Exception as e:
+        cur.execute("ROLLBACK;")
         logging.error(e)
         raise
 
@@ -55,19 +60,14 @@ def flight_lat_lon(schema, table):
         SELECT 
             A.flight_iata,
             A.DEPARTURE_SCHED_TIME,
-            A.arrival_city,
+            A.city_code,
+            A.country_code,
             B.lat as arrival_lat,
             B.lon as arrival_lon,
             A.today
         FROM analytics.flight_info A 
-        JOIN raw_data.lat_lon_info B 
-        ON A.arrival_city = B.city;      
-    """
-
-    add_depart_sql = f"""
-        ALTER TABLE {schema}.{table} 
-        ADD COLUMN departure_lat real,
-        ADD COLUMN departure_lon real;
+        JOIN analytics.lat_lon_info B 
+        ON A.city_code = B.city_code;      
     """
 
     update_depart_sql = f"""
@@ -81,6 +81,8 @@ def flight_lat_lon(schema, table):
     """
 
     try:
+        cur.execute("BEGIN;")
+
         cur.execute(f"DROP TABLE IF EXISTS {schema}.{table};")
         logging.info('drop table')
 
@@ -92,10 +94,43 @@ def flight_lat_lon(schema, table):
 
         cur.execute(update_depart_sql)
         logging.info('update departure')
+
+        cur.execute("COMMIT;")
     except Exception as e:
+        cur.execute("ROLLBACK;")
         logging.error(e)
         raise
 
+@task
+def flight_price_join(schema, table):
+    cur = get_snowflake_conn()
+
+    add_price_sql = f"""
+    ALTER TABLE {schema}.{table} ADD COLUMN price number;
+    """
+
+    update_price_sql = f"""
+    UPDATE {schema}.{table}
+    SET price = (
+        SELECT price, cabin
+        FROM raw_data.flight_price p
+        JOIN analytics.flight_info f
+        ON p.flight_iata = f.flight_iata
+        AND p.departure_sched_time = f.departure_sched_time
+    );
+    """
+
+    try:
+        cur.execute("BEGIN;")
+
+        cur.execute(add_price_sql)
+        cur.execute(update_price_sql)
+
+        cur.execute("COMMIT;")
+    except Exception as e:
+        cur.execute("ROLLBACK;")
+        logging.error(e)
+        raise
 
 
 with DAG (
