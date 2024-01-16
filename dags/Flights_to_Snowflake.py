@@ -4,8 +4,7 @@ from airflow.models import Variable
 from airflow.providers.snowflake.hooks.snowflake import SnowflakeHook
 from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 
-from datetime import datetime
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 import requests
 import logging
@@ -95,6 +94,9 @@ def get_amadeus_token():
 
 @task
 def extract_price(token, flight_list):
+    KST = timezone(timedelta(hours=9))
+    today = str(datetime.now(KST))[:10]
+
     logging.info(f'token: {token}')
     url = "https://test.api.amadeus.com/v2/shopping/flight-offers"
 
@@ -109,7 +111,7 @@ def extract_price(token, flight_list):
         raise ValueError("flight_list is None")
 
     arrival_country = [flight_list[i]['arrival_country'] for i in range(0, 10)]
-    departure_date = str(flight_list[0]['departure_sched_time'][:10])
+    departure_date = today
 
 
     for country in arrival_country:
@@ -183,6 +185,7 @@ def load_flight(flight_list, schema, table):
     VALUES (%(flight_iata)s, %(departure_sched_time)s, %(arrival_city)s, %(arrival_airport)s, %(departure_airport)s, %(arrival_sched_time)s, '{now}');
     """ 
     try:
+        cur.execute("BEGIN;")
         for flight in flight_list:
             if flight['flight_iata'] is None or flight['departure_sched_time'] is None or flight['departure_airport'] is None:
                 logging.info(f"Skipping flight due to NULL values: {flight}")
@@ -196,7 +199,9 @@ def load_flight(flight_list, schema, table):
                 'departure_airport': flight['departure_airport'], 
                 'arrival_sched_time': flight['arrival_sched_time']
             })
+        cur.execute("COMMIT;")
     except Exception as e:
+        cur.execute("ROLLBACK;")
         logging.error(e)
         raise
     
@@ -210,10 +215,13 @@ def load_flight(flight_list, schema, table):
     WHERE seq = 1;
     """
     try:
+        cur.execute("BEGIN;")
         cur.execute(f"DELETE FROM {schema}.{table};")
         cur.execute(alter_sql)
         logging.info(alter_sql)
+        cur.execute("COMMIT;")
     except Exception as e:
+        cur.execute("ROLLBACK;")
         logging.error(e)
         logging.info(alter_sql)
         raise
@@ -238,11 +246,14 @@ def load_price(price_list, schema, table):
     create_t_sql = f"""CREATE TEMP TABLE t AS SELECT * FROM {schema}.{table};"""
 
     try:
+        cur.execute("BEGIN;")
         cur.execute(create_table_sql)
         logging.info(create_table_sql)
         cur.execute(create_t_sql)
         logging.info(create_t_sql)
+        cur.execute("COMMIT;")
     except Exception as e:
+        cur.execute("ROLLBACK;")
         logging.error(e)
         raise
     
@@ -252,6 +263,7 @@ def load_price(price_list, schema, table):
     VALUES (%(flight_iata)s, %(departure_sched_time)s, %(price)s, %(cabin)s, '{now});""" 
 
     try:
+        cur.execute("BEGIN;")
         for price in price_list:
             logging.info(f"Insert price: {price}")
             cur.execute(insert_sql, {
@@ -260,7 +272,9 @@ def load_price(price_list, schema, table):
                 'price': price['price'], 
                 'cabin': price['cabin']
             })
+        cur.execute("COMMIT;")
     except Exception as e:
+        cur.execute("ROLLBACK;")
         logging.error(e)
         raise
 
@@ -275,9 +289,12 @@ def load_price(price_list, schema, table):
     WHERE seq = 1;
     """
     try:
+        cur.execute("BEGIN;")
         cur.execute(alter_sql)
         logging.info(alter_sql)
+        cur.execute("COMMIT;")
     except Exception as e:
+        cur.execute("ROLLBACK;")
         logging.error(e)
         raise
 
