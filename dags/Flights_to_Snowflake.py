@@ -3,6 +3,7 @@ from airflow.decorators import task
 from airflow.models import Variable
 from airflow.providers.snowflake.hooks.snowflake import SnowflakeHook
 from airflow.operators.trigger_dagrun import TriggerDagRunOperator
+from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 
 from datetime import datetime, timedelta, timezone
 
@@ -10,6 +11,8 @@ import requests
 import logging
 import json
 import pandas as pd
+import boto3
+from io import StringIO
 
 def get_snowflake_conn():
     hook = SnowflakeHook(snowflake_conn_id='snowflake_dev_db')
@@ -45,12 +48,14 @@ def extract_flight():
                     arrival_airport = flight['arrival']['airport']            # 도착 공항
                     arrival_sched_time  = flight['arrival']['scheduled']      # 도착 예정 시간
                     departure_airport = flight['departure']['airport']        # 출발 공항 (인천공항)
-                    departure_sched_time = flight['departure']['scheduled']   # 출발 예정 시간
+                    departure_sched_time = flight['departure']['scheduled'][:19]   # 출발 예정 시간
                     flight_iata = flight['flight']['iata']                    # 항공편명
+                    created_date = flight['departure']['scheduled'][:10]
 
-                    flight_dict = {'flight_iata':flight_iata, 'departure_sched_time':departure_sched_time, 'departure_airport':departure_airport, \
-                            'arrival_city':arrival_city, 'arrival_airport':arrival_airport, 'arrival_sched_time':arrival_sched_time}
-                    flight_list.append(flight_dict)
+                    if flight_iata is not None and departure_sched_time is not None:
+                        flight_dict = {'flight_iata':flight_iata, 'departure_sched_time':departure_sched_time, 'arrival_city':arrival_city, \
+                                'arrival_airport':arrival_airport, 'departure_airport':departure_airport, 'arrival_sched_time':arrival_sched_time, 'created_date':created_date}
+                        flight_list.append(flight_dict)
                 
                 if len(flights.get('data')) < limit:
                     break
@@ -94,8 +99,7 @@ def get_amadeus_token():
 
 @task
 def extract_price(token, flight_list):
-    KST = timezone(timedelta(hours=9))
-    today = str(datetime.now(KST))[:10]
+    today = flight_list[0]['departure_sched_time'][:10]
 
     logging.info(f'token: {token}')
     url = "https://test.api.amadeus.com/v2/shopping/flight-offers"
@@ -106,20 +110,26 @@ def extract_price(token, flight_list):
     }
 
     price_list = []
+    arrival_city = set()
+    iata_list = []
 
     if flight_list is None:
         raise ValueError("flight_list is None")
 
-    arrival_country = [flight_list[i]['arrival_country'] for i in range(0, 10)]
-    departure_date = today
+    for flight in flight_list:
+        if flight['departure_sched_time'][:10] == today:
+            arrival_city.add(flight['arrival_city']) 
 
 
-    for country in arrival_country:
-        logging.info(f'departure: {departure_date}, country: {country}')
+    logging.info(f'cities: {len(arrival_city)}')
+
+    arrival_city = list(arrival_city)
+    for city in arrival_city:
+        logging.info(f'departure: {today}, city: {city}')
         params = {
             'originLocationCode': 'ICN',  
-            'destinationLocationCode': country, 
-            'departureDate': departure_date, 
+            'destinationLocationCode': city, 
+            'departureDate': today, 
             'currencyCode': 'KRW',
             'adults': '1', 
         }
@@ -129,18 +139,23 @@ def extract_price(token, flight_list):
             
             offers = response.json()
             if not offers or not offers.get('data'):  
-                raise ValueError("No offer data")
+                logging.error("No offer data")
+                continue
             
             for offer in offers.get('data'):
                 first_flight = offer.get('itineraries')[0]['segments'][0]
                 flight_iata = first_flight['carrierCode'] + first_flight['number']
-                departure_sched_time = first_flight['departure']['at']
+                departure_sched_time = first_flight['departure']['at'][:19]
                 price = offer['price']['total']
                 cabin = offer['travelerPricings'][0]['fareDetailsBySegment'][0]['cabin']
 
-                logging.info(f'departure: {departure_sched_time}, price: {price}')
-                price_dict = {'flight_iata':flight_iata, 'departure_sched_time':departure_sched_time, 'price':price, 'cabin':cabin}
-                price_list.append(price_dict)
+                if (flight_iata, departure_sched_time) not in iata_list:
+                    logging.info(f'departure: {departure_sched_time}, price: {price}')
+                    price_dict = {'flight_iata':flight_iata, 'departure_sched_time':departure_sched_time, 'price':price, 'cabin':cabin, 'created_date':today}
+                    price_list.append(price_dict)
+                    iata_list.append([flight_iata, departure_sched_time])
+                else:
+                    continue
         except Exception as e:
             logging.info(response.status_code)
             logging.info(response.text)
@@ -150,153 +165,158 @@ def extract_price(token, flight_list):
 
 
 @task
-def load_flight(flight_list, schema, table):
+def flight_to_s3(flight_list):
+    hook = S3Hook('s3_upload')
+    today = str(datetime.now())[:10]
+
+    flight_df = pd.DataFrame(flight_list)
+
+    flight_buffer = StringIO()
+    flight_df.to_csv(flight_buffer, index=False)
+
+    try:
+        hook.load_string(
+            string_data=flight_buffer.getvalue(), 
+            key=f"info/flight_info_{today}.csv", 
+            bucket_name="flights-info", 
+            replace=True)
+        logging.info('s3 load')
+    except Exception as e:
+        logging.error(e)
+        raise
+    
+
+@task
+def flight_to_snowflake(schema, table):
     cur = get_snowflake_conn()
-    now = str(datetime.now())[:10]
+    key = Variable.get('s3_access_key')
+    secret = Variable.get('s3_access_secret')
+
+    today = str(datetime.now())[:10]
 
     create_table_sql = f"""
     CREATE TABLE IF NOT EXISTS {schema}.{table} (
-        flight_iata	            string	    NOT NULL,
-        departure_sched_time	datetime	NOT NULL,
+        flight_iata	            string,
+        departure_sched_time	string,
         arrival_city	        string,
         arrival_airport	        string,
-        departure_airport	    string	    NOT NULL	DEFAULT 'Seoul (Incheon)',
-        arrival_sched_time	    datetime,
-        created_date	        TIMESTAMP_NTZ(9)	NOT NULL	DEFAULT CURRENT_DATE(),
-        PRIMARY KEY (flight_iata, departure_sched_time)
+        departure_airport	    string	    DEFAULT 'Seoul (Incheon)',
+        arrival_sched_time	    string,
+        created_date	        string,
+        PRIMARY KEY(flight_iata, departure_sched_time)
     );
     """
 
-    # 임시테이블 생성
     create_t_sql = f"""CREATE TEMP TABLE t AS SELECT * FROM {schema}.{table};"""
+
+    copy_sql = f"""
+        COPY INTO t
+        FROM 's3://flights-info/info/flight_info_{today}.csv'
+        CREDENTIALS = (aws_key_id='{key}' aws_secret_key='{secret}')
+        ON_ERROR = CONTINUE;
+    """
+
+    insert_sql = f"""
+        INSERT INTO {schema}.{table}
+        SELECT * FROM t;
+    """ 
 
     try:
         cur.execute(create_table_sql)
         logging.info(create_table_sql)
         cur.execute(create_t_sql)
         logging.info(create_t_sql)
+
+        cur.execute("BEGIN;")
+        cur.execute(copy_sql)
+        logging.info(copy_sql)
+
+        cur.execute(insert_sql)
+        cur.execute("COMMIT;")
     except Exception as e:
         logging.error(e)
+        cur.execute("ROLLBACK;")
         raise
 
-    # 임시테이블 적재
-    insert_sql = f"""
-    INSERT INTO t 
-    VALUES (%(flight_iata)s, %(departure_sched_time)s, %(arrival_city)s, %(arrival_airport)s, %(departure_airport)s, %(arrival_sched_time)s, '{now}');
-    """ 
+
+@task
+def price_to_s3(price_list):
+    hook = S3Hook('s3_upload')
+    today = str(datetime.now())[:10]
+
+    price_df = pd.DataFrame(price_list)
+
+    price_buffer = StringIO()
+    price_df.to_csv(price_buffer, index=False)
+
+
     try:
-        cur.execute("BEGIN;")
-        for flight in flight_list:
-            if flight['flight_iata'] is None or flight['departure_sched_time'] is None or flight['departure_airport'] is None:
-                logging.info(f"Skipping flight due to NULL values: {flight}")
-                continue
-            logging.info(f"Inserting flight: {flight}")
-            cur.execute(insert_sql, {
-                'flight_iata': flight['flight_iata'], 
-                'departure_sched_time': flight['departure_sched_time'], 
-                'arrival_city': flight['arrival_city'], 
-                'arrival_airport': flight['arrival_airport'], 
-                'departure_airport': flight['departure_airport'], 
-                'arrival_sched_time': flight['arrival_sched_time']
-            })
-        cur.execute("COMMIT;")
+        hook.load_string(
+            string_data=price_buffer.getvalue(), 
+            key=f"price/flight_price_{today}.csv", 
+            bucket_name="flights-info", 
+            replace=True)
+        logging.info('s3 load')
     except Exception as e:
-        cur.execute("ROLLBACK;")
         logging.error(e)
-        raise
-    
-    # 기존 테이블 대체
-    alter_sql = f"""
-    INSERT INTO {schema}.{table} 
-    SELECT DISTINCT flight_iata, departure_sched_time, arrival_city, arrival_airport, departure_airport, arrival_sched_time, created_date FROM (
-        SELECT *, ROW_NUMBER() OVER (PARTITION BY flight_iata, departure_sched_time ORDER BY created_date DESC) seq
-        FROM t
-    )
-    WHERE seq = 1;
-    """
-    try:
-        cur.execute("BEGIN;")
-        cur.execute(f"DELETE FROM {schema}.{table};")
-        cur.execute(alter_sql)
-        logging.info(alter_sql)
-        cur.execute("COMMIT;")
-    except Exception as e:
-        cur.execute("ROLLBACK;")
-        logging.error(e)
-        logging.info(alter_sql)
         raise
 
 @task
-def load_price(price_list, schema, table):
+def price_to_snowflake(schema, table):
     cur = get_snowflake_conn()
-    now = str(datetime.now())[:10]
+    key = Variable.get('s3_access_key')
+    secret = Variable.get('s3_access_secret')
+    today = str(datetime.now())[:10]
 
     create_table_sql = f"""
     CREATE TABLE IF NOT EXISTS {schema}.{table} (
-        flight_iata	            string	    NOT NULL,
-        departure_sched_time	datetime	NOT NULL,
-        price	                number	    NOT NULL,
-        cabin	                string	    NOT NULL,
-        created_date	        datetime	NOT NULL	DEFAULT CURRENT_DATE(),
-        PRIMARY KEY (flight_iata, departure_sched_time)
+        flight_iata	            string,
+        departure_sched_time	string,
+        price	                number,
+        cabin	                string,
+        created_date	        string,
+        PRIMARY KEY(flight_iata, departure_sched_time)
     );
     """
 
-    # 임시테이블 생성
     create_t_sql = f"""CREATE TEMP TABLE t AS SELECT * FROM {schema}.{table};"""
 
+    copy_sql = f"""
+        COPY INTO t
+        FROM 's3://flights-info/price/flight_price_{today}.csv'
+        CREDENTIALS = (aws_key_id='{key}', aws_secret_key='{secret}')
+        ON_ERROR = 'CONTINUE';
+    """
+
+    insert_sql = f"""
+        INSERT INTO {schema}.{table}
+        SELECT *
+        FROM t
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM {schema}.{table}
+            WHERE {schema}.{table}.flight_iata = t.flight_iata
+                AND {schema}.{table}.departure_sched_time = t.departure_sched_time
+        );
+    """ 
+
     try:
-        cur.execute("BEGIN;")
         cur.execute(create_table_sql)
         logging.info(create_table_sql)
         cur.execute(create_t_sql)
         logging.info(create_t_sql)
-        cur.execute("COMMIT;")
-    except Exception as e:
-        cur.execute("ROLLBACK;")
-        logging.error(e)
-        raise
-    
-    # 임시테이블 적재
-    insert_sql = f"""
-    INSERT INTO t (flight_iata, departure_sched_time, price, cabin, created_date) 
-    VALUES (%(flight_iata)s, %(departure_sched_time)s, %(price)s, %(cabin)s, '{now});""" 
 
-    try:
         cur.execute("BEGIN;")
-        for price in price_list:
-            logging.info(f"Insert price: {price}")
-            cur.execute(insert_sql, {
-                'flight_iata': price['flight_iata'], 
-                'departure_sched_time': price['departure_sched_time'], 
-                'price': price['price'], 
-                'cabin': price['cabin']
-            })
+        cur.execute(copy_sql)
+        logging.info(copy_sql)
+
+        cur.execute(insert_sql)
         cur.execute("COMMIT;")
     except Exception as e:
-        cur.execute("ROLLBACK;")
         logging.error(e)
+        cur.execute("ROLLBACK;")
         raise
 
-    # 기존 테이블 대체
-    cur.execute(f"DELETE FROM {schema}.{table};")
-    alter_sql = f"""
-    INSERT INTO {schema}.{table} 
-    SELECT DISTINCT flight_iata, departure_sched_time, price, cabin, created_date FROM (
-        SELECT *, ROW_NUMBER() OVER (PARTITION BY date ORDER BY created_date DESC) seq
-        FROM t
-    )
-    WHERE seq = 1;
-    """
-    try:
-        cur.execute("BEGIN;")
-        cur.execute(alter_sql)
-        logging.info(alter_sql)
-        cur.execute("COMMIT;")
-    except Exception as e:
-        cur.execute("ROLLBACK;")
-        logging.error(e)
-        raise
 
 trigger_analytics = TriggerDagRunOperator(
     task_id = 'trigger_analytics',
@@ -308,16 +328,16 @@ trigger_analytics = TriggerDagRunOperator(
 
 with DAG(
     dag_id = 'flights_to_snowflake',
-    start_date = datetime(2024,1,8),
+    start_date = datetime(2024,1,15),
     schedule = '0 1 * * *',
     catchup = False,
     default_args = {
-        'retries': 1,
+        'retries': 2,
         'retry_delay': timedelta(minutes=3),
     }
 ) as dag:
     flight_list = extract_flight()
-    # token = get_amadeus_token()
-    # price_list = extract_price(token, flight_list)
-    load_flight(flight_list, 'raw_data', 'flight_info') >> trigger_analytics
-    # load_price(price_list, 'raw_data', 'flight_price')
+    token = get_amadeus_token()
+    price_list = extract_price(token, flight_list)
+    flight_to_s3(flight_list) >> flight_to_snowflake('raw_data', 'flight_info')
+    price_to_s3(price_list) >> price_to_snowflake('raw_data', 'flight_price') >> trigger_analytics
