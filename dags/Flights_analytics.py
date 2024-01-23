@@ -110,38 +110,39 @@ def flight_lat_lon(schema, table):
 
 @task
 def flight_price_join(schema, table):
-    # cur = get_snowflake_conn()
 
-    update_price_sql = f"""
-    UPDATE {schema}.{table}
-    SET price = (
-            SELECT distinct p.price
-            FROM analytics.flight_info f
-            JOIN (
-                SELECT 
-                    flight_iata, 
-                    departure_sched_time, 
-                    price, 
-                    ROW_NUMBER() OVER(PARTITION BY flight_iata, departure_sched_time ORDER BY flight_iata) as rn
-                FROM raw_data.flight_price
-            ) p
-            ON f.flight_iata = p.flight_iata AND f.departure_datetime = p.departure_sched_time
-            WHERE p.rn = 1),
-        cabin = (
-            SELECT distinct p.cabin
-            FROM analytics.flight_info f
-            JOIN (
-                SELECT 
-                    flight_iata, 
-                    departure_sched_time, 
-                    cabin, 
-                    ROW_NUMBER() OVER(PARTITION BY flight_iata, departure_sched_time ORDER BY flight_iata) as rn
-                FROM raw_data.flight_price
-            ) p
-            ON f.flight_iata = p.flight_iata AND f.departure_datetime = p.departure_sched_time
-            WHERE p.rn = 1
-        );
+    merge_price_sql = f"""
+    MERGE INTO {schema}.{table} f
+    USING (
+        SELECT 
+            flight_iata,
+            departure_sched_time,
+            price,
+            ROW_NUMBER() OVER(PARTITION BY flight_iata, departure_sched_time, cabin ORDER BY flight_iata) as rn
+        FROM
+            raw_data.flight_price
+    ) p
+    ON f.flight_iata = p.flight_iata AND f.departure_datetime = p.departure_sched_time
+    WHEN MATCHED AND p.rn = 1 THEN
+        UPDATE SET f.price = p.price;
     """
+
+    merge_cabin_sql = f"""
+    MERGE INTO {schema}.{table} f
+    USING (
+        SELECT 
+            flight_iata,
+            departure_sched_time,
+            cabin,
+            ROW_NUMBER() OVER(PARTITION BY flight_iata, departure_sched_time, cabin ORDER BY flight_iata) as rn
+        FROM
+            raw_data.flight_price
+    ) p
+    ON f.flight_iata = p.flight_iata AND f.departure_datetime = p.departure_sched_time
+    WHEN MATCHED AND p.rn = 1 THEN
+        UPDATE SET f.cabin = p.cabin;
+    """
+
 
     try:
         cur = get_snowflake_conn()
@@ -149,7 +150,9 @@ def flight_price_join(schema, table):
 
         cur.execute(f"ALTER TABLE {schema}.{table} ADD COLUMN price number;")
         cur.execute(f"ALTER TABLE {schema}.{table} ADD COLUMN cabin string;")
-        cur.execute(update_price_sql)
+        cur.execute(merge_price_sql)
+        cur.execute(merge_cabin_sql)
+        cur.execute(f"DELETE FROM {schema}.{table} WHERE price IS NULL OR cabin IS NULL;")
 
         cur.execute("COMMIT;")
     except Exception as e:

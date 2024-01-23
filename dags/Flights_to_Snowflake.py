@@ -11,7 +11,6 @@ import requests
 import logging
 import json
 import pandas as pd
-import boto3
 from io import StringIO
 
 def get_snowflake_conn():
@@ -132,6 +131,7 @@ def extract_price(token, flight_list):
             'departureDate': today, 
             'currencyCode': 'KRW',
             'adults': '1', 
+            'nonStop': 'true'
         }
 
         try:
@@ -146,14 +146,14 @@ def extract_price(token, flight_list):
                 first_flight = offer.get('itineraries')[0]['segments'][0]
                 flight_iata = first_flight['carrierCode'] + first_flight['number']
                 departure_sched_time = first_flight['departure']['at'][:19]
-                price = offer['price']['total']
+                price = offer['travelerPricings'][0]['price']['total']
                 cabin = offer['travelerPricings'][0]['fareDetailsBySegment'][0]['cabin']
 
-                if (flight_iata, departure_sched_time) not in iata_list:
+                if (flight_iata, departure_sched_time, cabin) not in iata_list:
                     logging.info(f'departure: {departure_sched_time}, price: {price}')
                     price_dict = {'flight_iata':flight_iata, 'departure_sched_time':departure_sched_time, 'price':price, 'cabin':cabin, 'created_date':today}
                     price_list.append(price_dict)
-                    iata_list.append([flight_iata, departure_sched_time])
+                    iata_list.append((flight_iata, departure_sched_time, cabin))
                 else:
                     continue
         except Exception as e:
@@ -197,11 +197,11 @@ def flight_to_snowflake(schema, table):
     create_table_sql = f"""
     CREATE TABLE IF NOT EXISTS {schema}.{table} (
         flight_iata	            string,
-        departure_sched_time	string,
+        departure_sched_time	datetime,
         arrival_city	        string,
         arrival_airport	        string,
         departure_airport	    string	    DEFAULT 'Seoul (Incheon)',
-        arrival_sched_time	    string,
+        arrival_sched_time	    datetime,
         created_date	        string,
         PRIMARY KEY(flight_iata, departure_sched_time)
     );
@@ -271,7 +271,7 @@ def price_to_snowflake(schema, table):
     create_table_sql = f"""
     CREATE TABLE IF NOT EXISTS {schema}.{table} (
         flight_iata	            string,
-        departure_sched_time	string,
+        departure_sched_time	datetime,
         price	                number,
         cabin	                string,
         created_date	        string,
@@ -297,6 +297,7 @@ def price_to_snowflake(schema, table):
             FROM {schema}.{table}
             WHERE {schema}.{table}.flight_iata = t.flight_iata
                 AND {schema}.{table}.departure_sched_time = t.departure_sched_time
+                AND {schema}.{table}.cabin = t.cabin
         );
     """ 
 
@@ -328,7 +329,7 @@ trigger_analytics = TriggerDagRunOperator(
 
 with DAG(
     dag_id = 'flights_to_snowflake',
-    start_date = datetime(2024,1,15),
+    start_date = datetime(2024,1,17),
     schedule = '0 1 * * *',
     catchup = False,
     default_args = {
